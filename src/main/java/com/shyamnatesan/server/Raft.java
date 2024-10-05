@@ -11,7 +11,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @AllArgsConstructor
 @NoArgsConstructor
@@ -19,13 +21,16 @@ import java.util.concurrent.TimeUnit;
 @Setter
 public class Raft extends UnicastRemoteObject implements PeerConnectionInterface {
 
+    private final int ELECTION_TIMEOUT_MIN = 150;
+    private final int HEARTBEAT_INTERVAL = 75;
+
     private NodeState nodeState = NodeState.FOLLOWER;
     private int serverId;
     private int term;
-    private int votesReceived;
+    private final AtomicInteger votesReceived = new AtomicInteger(0);
     private int votedFor = -1; // -1 means the node hasn't voted yet in the current term
     private Duration electionTimeout;
-    private Instant lastHeartbeatTime;
+    private Instant lastHeartbeatTime = Instant.now();
     private final Map<String, PeerConnectionInterface> peerConnections = new HashMap<>();
 
     @Override
@@ -58,7 +63,7 @@ public class Raft extends UnicastRemoteObject implements PeerConnectionInterface
         }
         // Reset election timeout to avoid premature elections
         resetElectionTimeout();
-        return  response;
+        return response;
 
     }
 
@@ -98,7 +103,8 @@ public class Raft extends UnicastRemoteObject implements PeerConnectionInterface
         ExecutorServiceManager.getExecutorService().submit(() -> {
             while (true) {
                 try {
-                    long timeout = 150 + (long) (Math.random() * 150); // Random between 150-300 ms
+                    // Random between 150-300 ms
+                    long timeout = ELECTION_TIMEOUT_MIN + ThreadLocalRandom.current().nextInt(0, ELECTION_TIMEOUT_MIN);
                     Thread.sleep(timeout);
 
                     if (Duration.between(this.lastHeartbeatTime, Instant.now()).toMillis() > timeout) {
@@ -116,10 +122,10 @@ public class Raft extends UnicastRemoteObject implements PeerConnectionInterface
     private void startElection() {
         this.nodeState = NodeState.CANDIDATE;
         this.term++;
-        this.votesReceived = 1;
         this.votedFor = this.serverId;
 
         System.out.println("Node " + this.serverId + " started an election for term " + this.term);
+        votesReceived.set(1); // set to 1 for self vote
 
         for (Map.Entry<String, PeerConnectionInterface> peerEntry : this.peerConnections.entrySet()) {
             ExecutorServiceManager.getExecutorService().submit(() -> {
@@ -129,8 +135,8 @@ public class Raft extends UnicastRemoteObject implements PeerConnectionInterface
                     VoteGranted voteGranted = peer.voteRequested(voteRequest);
 
                     if (voteGranted.isVoteGranted()) {
-                        this.votesReceived++;
-                        System.out.println("Node " + this.serverId + " received a vote. Total votes: " + this.votesReceived);
+                        int currentVotes = votesReceived.incrementAndGet();
+                        System.out.println("Node " + this.serverId + " received a vote. Total votes: " + currentVotes);
 
                         if (hasMajorityVotes()) {
                             becomeLeader();
@@ -167,11 +173,10 @@ public class Raft extends UnicastRemoteObject implements PeerConnectionInterface
     private boolean hasMajorityVotes() {
         // Calculate majority (total nodes / 2)
         int totalNodes = peerConnections.size() + 1; // +1 for self
-        return this.votesReceived > (totalNodes / 2);
+        return this.votesReceived.get() > (totalNodes / 2);
     }
 
     private void startSendingHeartbeats() {
-        long heartbeatInterval = 75;
         ScheduledExecutorServiceManager
                 .getScheduledExecutorService()
                 .scheduleAtFixedRate(() -> {
@@ -182,6 +187,6 @@ public class Raft extends UnicastRemoteObject implements PeerConnectionInterface
                             peerConnectionInterface.heartbeatReceived(appendEntries);
                         });
                     }
-                }, 0, heartbeatInterval, TimeUnit.MILLISECONDS);
+                }, 0, HEARTBEAT_INTERVAL, TimeUnit.MILLISECONDS);
     }
 }
