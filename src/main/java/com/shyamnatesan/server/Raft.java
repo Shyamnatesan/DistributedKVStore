@@ -78,18 +78,18 @@ public class Raft extends UnicastRemoteObject implements PeerConnectionInterface
         int leaderId = appendEntries.getLeaderId();
         int leaderTerm = appendEntries.getLeaderTerm();
 
-//      If the leader's term is lower, ignore the heartbeat
+        // If the leader's term is lower, ignore the heartbeat
         if (leaderTerm < this.term) {
             System.out.println("Heartbeat from leader " + leaderId + " ignored due to outdated term");
             return;
         }
-//      If the leader's term is higher, update this node's term and follow the leader
+        // If the leader's term is higher, update this node's term and follow the leader
         if (leaderTerm > this.term) {
             this.term = leaderTerm;
             this.nodeState = NodeState.FOLLOWER;
             this.votedFor = -1;
         }
-//      Reset election timeout because we received a valid heartbeat
+        // Reset election timeout because we received a valid heartbeat
         resetElectionTimeout();
         System.out.println("Heartbeat received from leader " + leaderId + ", term " + leaderTerm);
     }

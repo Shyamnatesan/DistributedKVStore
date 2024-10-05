@@ -38,14 +38,18 @@ public class Server {
         try (ServerSocket serverSocket = new ServerSocket(this.port)) {
             System.out.println("Starting server at " + this.host + ":" + this.port + "...");
             while (true) {
-                Socket clientSocket = serverSocket.accept();
-                System.out.println("Accepted connection from " +
-                        clientSocket.getInetAddress() + ":" + clientSocket.getPort());
-                ExecutorServiceManager.getExecutorService().submit(() -> handleClientConnection(clientSocket));
+                try {
+                    Socket clientSocket = serverSocket.accept();
+                    System.out.println("Accepted connection from " +
+                            clientSocket.getInetAddress() + ":" + clientSocket.getPort());
+                    ExecutorServiceManager.getExecutorService().submit(() -> handleClientConnection(clientSocket));
+                }catch (IOException e) {
+                    System.err.println("Error accepting connection: " + e.getMessage());
+                }
             }
         } catch (IOException e) {
             System.err.println("Error starting server: " + e.getMessage());
-            throw new RuntimeException(e);
+            throw new RuntimeException("Failed to start TCP server", e);
         }
     }
 
@@ -64,14 +68,38 @@ public class Server {
             String[] peerHostAndPort = peerAddress.split(":");
             String peerHost = peerHostAndPort[0];
             int peerPort = Integer.parseInt(peerHostAndPort[1]);
-            try {
-                Registry registry = LocateRegistry.getRegistry(peerHost, peerPort);
-                PeerConnectionInterface peerInterface = (PeerConnectionInterface) registry.lookup("Peer");
-                this.raft.populatePeerConnections(peerAddress, peerInterface);
-                System.out.println("Connected to peer at " + peerAddress);
-            } catch (Exception e) {
-                System.err.println("Error connecting to peer at " + peerAddress + ": " + e.getMessage());
-                throw new RuntimeException(e);
+            int attempts = 0;
+            boolean connected = false;
+
+            while (!connected && attempts < 5) {
+                try {
+                    // Attempt to connect to the registry
+                    Registry registry = LocateRegistry.getRegistry(peerHost, peerPort);
+                    PeerConnectionInterface peerInterface = (PeerConnectionInterface) registry.lookup("Peer");
+                    this.raft.populatePeerConnections(peerAddress, peerInterface);
+                    System.out.println("Connected to peer at " + peerAddress);
+                    connected = true; // Set connected to true on successful connection
+                }catch (Exception e) {
+                    attempts++;
+                    long waitTime = (long) Math.pow(2, attempts) * 100; // Exponential backoff
+                    System.err.printf("Error connecting to peer at %s (attempt %d): %s%n", peerAddress, attempts, e.getMessage());
+                    if (attempts < 5) {
+                        try {
+                            Thread.sleep(waitTime); // Wait before retrying
+                        }catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            System.err.println("Thread was interrupted during backoff wait.");
+                        }
+                    }else{
+                        System.err.println("Max connection attempts reached for peer at " + peerAddress);
+                    }
+
+                }
+            }
+
+            // If connection is not established after all attempts, throw an exception
+            if (!connected) {
+                throw new RuntimeException("Failed to connect to peer at " + peerAddress + " after 5 attempts.");
             }
         }
     }
